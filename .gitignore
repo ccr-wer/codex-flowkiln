@@ -1,0 +1,30 @@
+# Python 运行产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 项目运行数据：含原始提示词，绝不入库
+# 若用 WFM_DATA_DIR 把数据指到仓库内，也请确保该目录被这里覆盖
+prompts.jsonl
+candidates.json
+.demo-data/
+
+# 密钥与本地配置
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.*
+*.log
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

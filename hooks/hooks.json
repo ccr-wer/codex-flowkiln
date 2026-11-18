@@ -1,0 +1,15 @@
+{
+  "_readme": "Copy to ~/.codex/hooks.json (user scope) or <repo>/.codex/hooks.json (project scope, requires .codex to be trusted). Set [features].hooks = true in ~/.codex/config.toml. Replace ABSOLUTE_PATH with the real path to scripts/wfminer.py. Event names and I/O shape follow the Codex CLI hook contract.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ABSOLUTE_PATH/wfminer.py collect --event UserPromptSubmit"
+          }
+        ]
+      }
+    ]
+  }
+}
