@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "0.1.0-skeleton"
+VERSION = "0.1.1-skeleton"
 
 # ---------------------------------------------------------------------------
 # Paths (user scope by default, so the worktree stays clean)
@@ -44,6 +44,10 @@ def prompts_path() -> Path:
 
 def candidates_path() -> Path:
     return data_dir() / "candidates.json"
+
+
+def dismissed_path() -> Path:
+    return data_dir() / "dismissed.json"
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +135,108 @@ def read_prompts(path: Optional[Path] = None) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue  # tolerate a torn append
     return out
+
+
+# ---------------------------------------------------------------------------
+# review : the human decides. list -> user says keep/dismiss -> act.
+# A dismissed cluster is fingerprinted so the same workflow does not come back.
+# ---------------------------------------------------------------------------
+
+def read_dismissed() -> List[Dict[str, Any]]:
+    path = dismissed_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def write_dismissed(entries: List[Dict[str, Any]]) -> Path:
+    out = dismissed_path()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def is_dismissed(terms: List[str], dismissed: List[Dict[str, Any]]) -> bool:
+    """A cluster is dismissed if its skeleton terms largely overlap a rejection.
+
+    Fuzzy on purpose: the same workflow may pick up one extra term next time,
+    so we require >=75% of the smaller term set to match.
+    """
+    cur = {t for t in terms if t}
+    for entry in dismissed:
+        seen = set(entry.get("fingerprint_terms", []))
+        if not seen:
+            continue
+        overlap = len(cur & seen)
+        if overlap >= max(1, int(0.75 * min(len(cur), len(seen)))):
+            return True
+    return False
+
+
+def filter_dismissed(candidates: List[Dict[str, Any]],
+                     dismissed: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    kept, skipped = [], 0
+    for c in candidates:
+        if is_dismissed(c.get("skeleton_terms", []), dismissed):
+            skipped += 1
+        else:
+            kept.append(c)
+    return kept, skipped
+
+
+def dismiss(candidates: List[Dict[str, Any]], wanted: str,
+            reason: str = "") -> Dict[str, Any]:
+    """Remove one candidate from the list and remember the rejection.
+
+    The fingerprint (skeleton terms) is what keeps it from reappearing on the
+    next mine run - simply deleting it would just bring it back.
+    """
+    hit = next((c for c in candidates if c.get("id") == wanted), None)
+    if hit is None:
+        raise SystemExit(f"candidate not found: {wanted}")
+    kept = [c for c in candidates if c.get("id") != wanted]
+    kept_path = candidates_path()
+    kept_path.parent.mkdir(parents=True, exist_ok=True)
+    kept_path.write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    entries = read_dismissed()
+    entries.append({
+        "id": hit["id"],
+        "fingerprint_terms": hit.get("skeleton_terms", []),
+        "count": hit.get("count", 0),
+        "reason": reason,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
+    write_dismissed(entries)
+    return {
+        "dismissed": hit["id"],
+        "count": hit.get("count", 0),
+        "reason": reason or "(none)",
+        "remaining": len(kept),
+        "note": "removed from the list; fingerprinted so it will not come back",
+    }
+
+
+def render_list(candidates: List[Dict[str, Any]]) -> str:
+    """Human-readable review list. Meant to be pasted into the chat verbatim."""
+    if not candidates:
+        return "No candidates awaiting review."
+    lines = [f"{len(candidates)} candidate(s) awaiting review:", ""]
+    for i, c in enumerate(candidates, 1):
+        terms = ", ".join(c.get("skeleton_terms", [])[:6]) or "(none)"
+        slots = ", ".join(c.get("slots", [])) or "none detected"
+        sample = (c.get("samples") or ["(no sample)"])[0]
+        lines.append(f"[{i}] id={c['id']}  count={c['count']}")
+        lines.append(f"    terms: {terms}")
+        lines.append(f"    slots: {slots}")
+        lines.append(f"    sample: {sample}")
+        lines.append("")
+    lines.append("Keep some? Promote those. Say no to any other -> dismiss it.")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +328,7 @@ def keywords(text: str) -> set:
     """Extract content-bearing terms: latin words + CJK runs, minus stopwords."""
     found = set(LATIN_RE.findall(text.lower()))
     for run in CJK_RUN_RE.findall(text):
-        # Use 2-grams as the common signal. A whole long run ('抓下来按格式发微信')
+        # Use 2-grams as the common signal. A whole long CJK run
         # almost never repeats verbatim, so including it only inflates the union.
         for n in (2, 3):
             for i in range(len(run) - n + 1):
@@ -470,6 +576,25 @@ def selftest() -> int:
         second = mine(records, threshold=0.70, min_count=3)
         check("deterministic mining", [c["id"] for c in second] == [c["id"] for c in candidates])
 
+        # review loop: the list goes to the user; a "no" must erase and stay erased
+        check("render_list names every id",
+              bool(candidates) and all(c["id"] in render_list(candidates) for c in candidates))
+        target = candidates[0]["id"]
+        result = dismiss(candidates, target, reason="user said no")
+        check("dismiss reports removal", result["dismissed"] == target)
+        check("dismiss shrinks the list", result["remaining"] == len(candidates) - 1)
+        left = read_candidates()
+        check("dismissed id gone from list", all(c["id"] != target for c in left))
+        entries = read_dismissed()
+        check("dismiss records fingerprint",
+              bool(entries) and entries[-1]["id"] == target and entries[-1]["fingerprint_terms"])
+        filtered, skipped = filter_dismissed(candidates, entries)
+        check("filter drops dismissed cluster", skipped == 1)
+        check("filter keeps the rest", len(filtered) == len(candidates) - 1)
+        resurrected, skipped2 = filter_dismissed(
+            mine(records, threshold=0.70, min_count=3), read_dismissed())
+        check("dismissed cluster stays gone", skipped2 == 1 and all(c["id"] != target for c in resurrected))
+
         os.environ.pop("WFM_DATA_DIR", None)
 
     passed = sum(1 for _, ok in checks if ok)
@@ -504,6 +629,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_promote.add_argument("--apply", action="store_true", help="actually write (default: dry-run)")
     p_promote.add_argument("--dest", help="skills root (default: ~/.agents/skills)")
 
+    p_list = subs.add_parser("list", help="print the review list for the chat")
+    p_list.add_argument("--json", action="store_true", help="print as JSON")
+
+    p_dismiss = subs.add_parser("dismiss", help="drop a candidate after the user says no")
+    p_dismiss.add_argument("id", help="candidate id to remove")
+    p_dismiss.add_argument("--reason", default="", help="why the user rejected it")
+
     subs.add_parser("selftest", help="synthetic end-to-end verification")
     subs.add_parser("version")
 
@@ -519,16 +651,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         return selftest()
     if args.cmd == "mine":
         records = read_prompts()
-        candidates = mine(records, args.threshold, args.min_count, args.shared_keywords)
+        raw = mine(records, args.threshold, args.min_count, args.shared_keywords)
+        kept, skipped = filter_dismissed(raw, read_dismissed())
         out = candidates_path()
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8")
+        out.write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+        if args.json:
+            print(json.dumps(kept, ensure_ascii=False, indent=2))
+        else:
+            print(f"{len(records)} prompts -> {len(kept)} candidate(s)")
+            if skipped:
+                print(f"skipped {skipped} dismissed cluster(s)")
+            for c in kept:
+                print(f"  {c['id']}  count={c['count']}  terms={','.join(c['skeleton_terms'][:4])}")
+        return 0
+    if args.cmd == "list":
+        candidates = read_candidates()
         if args.json:
             print(json.dumps(candidates, ensure_ascii=False, indent=2))
         else:
-            print(f"{len(records)} prompts -> {len(candidates)} candidate(s)")
-            for c in candidates:
-                print(f"  {c['id']}  count={c['count']}  terms={','.join(c['skeleton_terms'][:4])}")
+            print(render_list(candidates))
+        return 0
+    if args.cmd == "dismiss":
+        result = dismiss(read_candidates(), args.id, args.reason)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     if args.cmd == "promote":
         candidates = read_candidates()

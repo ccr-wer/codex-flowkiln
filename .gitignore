@@ -12,7 +12,8 @@ venv/
 # 若用 WFM_DATA_DIR 把数据指到仓库内，也请确保该目录被这里覆盖
 prompts.jsonl
 candidates.json
-.demo-data/
+dismissed.json
+.demo-*/
 
 # 密钥与本地配置
 .env
