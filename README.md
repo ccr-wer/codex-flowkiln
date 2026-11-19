@@ -94,6 +94,14 @@ python scripts/wfminer.py dismiss <candidate-id> --reason "用户说不需要"
 
 数据目录可用环境变量 `WFM_DATA_DIR` 覆盖，便于测试和隔离。
 
+## 跨平台注意事项
+
+引擎本身是纯 Python 标准库，Windows / macOS / Linux 通用。Windows 上已实测（33/33）；macOS / Linux 按代码审查应无差异，但未逐一真机验证。装 hook 时有三个常见坑：
+
+1. **命令名不统一**：`hooks.json` 示例写的是 `python`。Linux / macOS 上常用 `python3`，Windows 上可能只有 `py` 启动器——按本机实际情况改。
+2. **Windows 路径转义**：绝对路径写进 JSON，反斜杠要转义（写作 `C:\\path\\to\\wfminer.py`），或直接用正斜杠（Windows 同样接受：`C:/path/to/wfminer.py`）。
+3. **控制台中文乱码**：Windows 默认 GBK 终端下，`list` 输出的中文样本可能显示乱码（写盘始终是 UTF-8，数据不受影响）。跑之前设 `set PYTHONIOENCODING=utf-8` 或 `chcp 65001`；macOS / Linux 通常无此问题。
+
 ## 安装 hook（可选）
 
 1. 把 `hooks/hooks.json` 中的 `ABSOLUTE_PATH` 替换为 `scripts/wfminer.py` 的真实绝对路径。

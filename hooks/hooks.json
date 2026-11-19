@@ -1,5 +1,5 @@
 {
-  "_readme": "Copy to ~/.codex/hooks.json (user scope) or <repo>/.codex/hooks.json (project scope, requires .codex to be trusted). Set [features].hooks = true in ~/.codex/config.toml. Replace ABSOLUTE_PATH with the real path to scripts/wfminer.py. Event names and I/O shape follow the Codex CLI hook contract.",
+  "_readme": "Copy to ~/.codex/hooks.json (user scope) or <repo>/.codex/hooks.json (project scope, requires .codex to be trusted). Set [features].hooks = true in ~/.codex/config.toml. Replace ABSOLUTE_PATH with the real absolute path to scripts/wfminer.py. Interpreter name varies by platform: keep 'python' where that is on PATH, use 'python3' on macOS/Linux or 'py' on Windows otherwise. On Windows escape backslashes in the path (C:\\\\path\\\\to\\\\wfminer.py) or just use forward slashes (C:/path/to/wfminer.py). Event names and I/O shape follow the Codex CLI hook contract.",
   "hooks": {
     "UserPromptSubmit": [
       {
